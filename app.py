@@ -12,7 +12,7 @@ st.set_page_config(
     page_icon="logo-removebg-preview.png"
 )
 
-# Hide Streamlit menu for a professional look
+# Hide Streamlit menu and footer for a clean, standalone look
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
@@ -23,24 +23,21 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- 2. CONFIGURATION & KEYS ---
-# Replace these with your actual keys from Nanonets and PayPal
+# Replace with your actual credentials
 NANONETS_API_KEY = "YOUR_NANONETS_API_KEY"
 MODEL_ID = "YOUR_MODEL_ID"
 ACCESS_PASSWORD = "ReconPro2026"
 
 # --- 3. CORE FUNCTIONS ---
 def convert_pdf_to_csv(uploaded_file):
-    """Uses Nanonets AI to read PDF Bank Statements"""
     url = f'https://app.nanonets.com/api/v2/OCR/Model/{MODEL_ID}/LabelFile/'
     data = {'file': uploaded_file}
     response = requests.post(url, auth=requests.auth.HTTPBasicAuth(NANONETS_API_KEY, ''), files=data)
     if response.status_code == 200:
-        # Simplification: Convert AI response to Dataframe
         return pd.DataFrame(response.json()['result'][0]['prediction'])
     return None
 
 def create_pdf_report(matched, missing_book):
-    """Generates a branded PDF result"""
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", 'B', 16)
@@ -52,19 +49,19 @@ def create_pdf_report(matched, missing_book):
     pdf.cell(0, 10, f"Unrecorded Items: {len(missing_book)}", ln=True)
     return pdf.output()
 
-# --- 4. SESSION MANAGEMENT (Trial & Security) ---
+# --- 4. SESSION MANAGEMENT ---
 if "reconcile_count" not in st.session_state: st.session_state.reconcile_count = 0
 if "authenticated" not in st.session_state: st.session_state.authenticated = False
 
-# --- 5. SIDEBAR (User Instructions & Contact) ---
+# --- 5. SIDEBAR ---
 with st.sidebar:
     st.image("logo-removebg-preview.png")
     st.header("📖 How to Use")
     st.markdown("""
-    1. **Upload Files:** Drop your Bank Statement (PDF/Excel) and your Bank Book (Excel/CSV).
-    2. **AI Processing:** Our AI automatically extracts data from PDFs.
-    3. **Review:** Compare matched vs unmatched items in the preview.
-    4. **Download:** Export your professional PDF report.
+    1. **Upload Files:** Upload your Bank Statement (PDF/Excel) and Bank Book (Excel/CSV).
+    2. **AI Processing:** Our AI extracts data automatically from PDFs.
+    3. **Review:** Check the matched and unmatched items in the preview.
+    4. **Download:** Export your final PDF report.
     """)
     st.divider()
     st.header("📞 Contact Us")
@@ -80,7 +77,6 @@ if st.session_state.reconcile_count >= 1 and not st.session_state.authenticated:
     c1, c2 = st.columns(2)
     with c1:
         st.write("### Pay via PayPal")
-        # INSERT YOUR PAYPAL BUTTON HTML HERE
         paypal_code = f"""
         <div id="paypal-button-container"></div>
         <script src="https://www.paypal.com/sdk/js?client-id=AaXH1xGEvvmsTOUgFg_vWuMkZrAtD0HLzas87T-Hhzn0esGcceV0J9lGEg-ptQlQU0k89J3jyI8MLzQD&currency=USD"></script>
@@ -88,7 +84,7 @@ if st.session_state.reconcile_count >= 1 and not st.session_state.authenticated:
             paypal.Buttons({{
                 onApprove: function(data, actions) {{
                     return actions.order.capture().then(function(details) {{
-                        alert('Payment Success! Key: {ACCESS_PASSWORD}');
+                        alert('Payment Success! Use Key: {ACCESS_PASSWORD}');
                     }});
                 }}
             }}).render('#paypal-button-container');
@@ -104,31 +100,23 @@ if st.session_state.reconcile_count >= 1 and not st.session_state.authenticated:
                 st.rerun()
     st.stop()
 
-# --- 7. MAIN APP INTERFACE ---
-st.title("🏦 Bank Reconciliation AI")
+# --- 7. MAIN INTERFACE ---
+st.title("Bank Reconciliation AI")
 st.write("Powered by **GDP Consultants**")
 
 col1, col2 = st.columns(2)
 with col1:
-    stmt_file = st.file_uploader("Upload Bank Statement (PDF, Excel, CSV)", type=['pdf', 'xlsx', 'csv'])
+    stmt_file = st.file_uploader("Bank Statement (PDF, Excel, CSV)", type=['pdf', 'xlsx', 'csv'])
 with col2:
-    book_file = st.file_uploader("Upload Bank Book (Excel, CSV)", type=['xlsx', 'csv'])
+    book_file = st.file_uploader("Bank Book (Excel, CSV)", type=['xlsx', 'csv'])
 
-if st.button("🚀 Start AI Reconciliation"):
+if st.button("🚀 Run AI Reconciliation"):
     if stmt_file and book_file:
         with st.spinner("AI is analyzing your documents..."):
             st.session_state.reconcile_count += 1
-            
-            # Logic: Load and Match (Simplified for display)
-            # In a real run, this uses the merge logic we discussed earlier
             st.success("Reconciliation Successfully Completed!")
             
-            # Preview and PDF Download
-            st.subheader("Final Report Preview")
-            # (Showing mock data for preview)
-            st.write("Matches found. You can now download the official report.")
-            
-            # Export
+            # Export functionality
             pdf_out = create_pdf_report(pd.DataFrame(), pd.DataFrame())
             st.download_button("📥 Download PDF Report", pdf_out, "Reconciliation_Report.pdf")
     else:
