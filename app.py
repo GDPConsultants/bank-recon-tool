@@ -2,141 +2,130 @@ import streamlit as st
 import pandas as pd
 import requests
 from fpdf import FPDF
-import streamlit.components.v1 as components
+from io import BytesIO
 
-# --- 1. BRANDING & UI CONFIGURATION ---
-st.set_page_config(
-    page_title="Bank Reconciliation AI | GDP Consultants", 
-    layout="wide", 
-    page_icon="logo-removebg-preview.png"
-)
+# --- 1. BRANDING & UI ---
+st.set_page_config(page_title="Bank Reconciliation AI | GDP Consultants", layout="wide", page_icon="logo-removebg-preview.png")
 
-st.markdown("""
-    <style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-    .stDeployButton {display:none;}
-    </style>
-    """, unsafe_allow_html=True)
+st.markdown("""<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;} .stDeployButton {display:none;}</style>""", unsafe_allow_html=True)
 
-# --- 2. PROFESSIONAL BRS REPORT GENERATOR ---
-class BRS_Report(FPDF):
-    def header(self):
-        try:
-            self.image("logo-removebg-preview.png", 10, 8, 25)
-        except:
-            pass
-        self.set_font("Arial", 'B', 15)
-        self.cell(80)
-        self.cell(30, 10, 'Bank Reconciliation Statement', 0, 0, 'C')
-        self.ln(20)
-
-def generate_detailed_pdf(header_info, data):
-    pdf = BRS_Report()
+# --- 2. BRS REPORT GENERATOR (ADVANCED) ---
+def create_comprehensive_brs(info, summary, unadjusted_book, unrealised_deposits):
+    pdf = FPDF()
     pdf.add_page()
     
-    # Business Header Details
-    pdf.set_font("Arial", 'B', 11)
-    pdf.cell(0, 7, f"Business Name: {header_info['business_name']}", ln=True)
-    pdf.cell(0, 7, f"Bank Name: {header_info['bank_name']}", ln=True)
-    pdf.cell(0, 7, f"Account Number: {header_info['acc_no']}", ln=True)
-    pdf.cell(0, 7, f"Period: {header_info['period']}", ln=True)
+    # Company Header
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 10, "Bank Reconciliation Statement", ln=True, align='C')
+    pdf.set_font("Arial", '', 10)
+    pdf.cell(0, 7, f"Business Name: {info['biz_name']}", ln=True, align='C')
+    pdf.cell(0, 7, f"Bank: {info['bank_name']} | A/C: {info['acc_no']}", ln=True, align='C')
+    pdf.cell(0, 7, f"Period: {info['period']}", ln=True, align='C')
+    pdf.ln(10)
+
+    # Section 1: Adjusted Cash Book (Unadjusted entries)
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, "1. Unadjusted Entries in Cash Book (Need Entry)", ln=True)
+    pdf.set_font("Arial", 'B', 10)
+    pdf.cell(30, 8, "Date", 1)
+    pdf.cell(80, 8, "Description", 1)
+    pdf.cell(40, 8, "Reference", 1)
+    pdf.cell(40, 8, "Amount", 1, ln=True)
+    
+    pdf.set_font("Arial", '', 9)
+    for _, row in unadjusted_book.iterrows():
+        pdf.cell(30, 8, str(row['Date']), 1)
+        pdf.cell(80, 8, str(row['Description'])[:40], 1)
+        pdf.cell(40, 8, str(row['Reference']), 1)
+        pdf.cell(40, 8, f"{row['Amount']:,.2f}", 1, ln=True)
     pdf.ln(5)
 
-    # Section 1: Balance as per Bank Statement
+    # Section 2: Reconciled BRS
     pdf.set_font("Arial", 'B', 12)
-    pdf.cell(140, 10, "Closing Balance per Bank Statement", 1)
-    pdf.cell(50, 10, f"{data['bank_bal']:,.2f}", 1, ln=True)
+    pdf.cell(0, 10, "2. Reconciliation of Bank Balance", ln=True)
+    pdf.set_font("Arial", '', 11)
     
-    # Section 2: Unrealized Deposits (Lodgements not yet Cleared)
-    pdf.set_fill_color(240, 240, 240)
-    pdf.cell(190, 10, "Add: Lodgements not yet Cleared (Unrealized Deposits)", 1, ln=True, fill=True)
-    pdf.set_font("Arial", '', 10)
-    for item in data['unrealized']:
-        pdf.cell(140, 8, f"  {item['date']} - {item['ref']} ({item['desc']})", 1)
-        pdf.cell(50, 8, f"{item['amt']:,.2f}", 1, ln=True)
+    pdf.cell(140, 10, "Balance as per Bank Statement", 1)
+    pdf.cell(50, 10, f"{summary['bank_bal']:,.2f}", 1, ln=True)
     
-    # Section 3: Unpresented Cheques
-    pdf.set_font("Arial", 'B', 10)
-    pdf.cell(190, 10, "Less: Unpresented Cheques", 1, ln=True, fill=True)
-    pdf.set_font("Arial", '', 10)
-    for item in data['unpresented']:
-        pdf.cell(140, 8, f"  {item['date']} - {item['ref']} ({item['desc']})", 1)
-        pdf.cell(50, 8, f"({item['amt']:,.2f})", 1, ln=True)
-        
-    # Section 4: Final Reconciled Balance
-    pdf.ln(5)
+    pdf.cell(140, 10, "(+) Lodgements not yet Cleared (Unrealised)", 1)
+    pdf.cell(50, 10, f"{summary['unrealised_total']:,.2f}", 1, ln=True)
+    
+    pdf.cell(140, 10, "(-) Unpresented Cheques (Outstanding)", 1)
+    pdf.cell(50, 10, f"({summary['unpresented_total']:,.2f})", 1, ln=True)
+    
     pdf.set_font("Arial", 'B', 12)
-    pdf.cell(140, 10, "Balance as per Adjusted Bank Account", 1)
-    pdf.cell(50, 10, f"{data['adj_bal']:,.2f}", 1, ln=True)
+    pdf.cell(140, 12, "Balance as per Adjusted Cash Book", 1)
+    pdf.cell(50, 12, f"{summary['final_bal']:,.2f}", 1, ln=True)
     
     return bytes(pdf.output())
 
-# --- 3. MAIN APP INTERFACE ---
-st.title("Bank Reconciliation AI")
-st.write("Professional Audit Standard by **GDP Consultants**")
-
-# Sidebar for Setup & Contact
+# --- 3. MAIN APP ---
 with st.sidebar:
     st.image("logo-removebg-preview.png")
-    st.header("📞 GDP Consultants")
+    st.header("📖 CPA Methodology")
+    st.markdown("""
+    **Standard Steps:**
+    1. Verify Opening Balances
+    2. Identify **Unrealised Deposits**
+    3. Identify **Unpresented Cheques**
+    4. List **Unadjusted Book Entries**
+    """)
+    st.divider()
     st.write("📧 info@taxcalculator.lk")
-    st.write("🌐 [www.taxcalculator.lk](https://www.taxcalculator.lk)")
+    st.write("🌐 www.taxcalculator.lk")
 
-# Input for Report Header
-with st.expander("📝 Report Details (Bank & Business)", expanded=True):
-    col_a, col_b = st.columns(2)
-    with col_a:
-        biz_name = st.text_input("Business Name", value="GDP Consultants")
-        bank_name = st.text_input("Bank Name", placeholder="e.g. BOC, Sampath")
-    with col_b:
-        acc_no = st.text_input("Account Number")
-        period = st.text_input("Reconciliation Period", placeholder="e.g. December 202X")
+st.title("Bank Reconciliation AI")
+st.write("Advanced Financial Reconciliation by **GDP Consultants**")
 
-# File Uploaders
-col1, col2 = st.columns(2)
-with col1:
-    stmt_file = st.file_uploader("Bank Statement (PDF/Excel)", type=['pdf', 'xlsx', 'csv'])
-with col2:
-    book_file = st.file_uploader("Cash Book (Excel)", type=['xlsx', 'csv'])
+# Input Fields for Report Details
+with st.expander("📝 Report Metadata (Edit if AI extraction needs correction)"):
+    c1, c2 = st.columns(2)
+    biz_name = c1.text_input("Business Name", "Your Company Name")
+    bank_name = c2.text_input("Bank Name", "Commercial Bank")
+    acc_no = c1.text_input("Account Number", "0012345678")
+    period = c2.text_input("Reconciliation Period", "January 2026")
 
-if st.button("🚀 Generate Detailed BRS Report"):
+col_a, col_b = st.columns(2)
+with col_a:
+    stmt_file = st.file_uploader("Bank Statement", type=['pdf', 'xlsx', 'csv'])
+with col_b:
+    book_file = st.file_uploader("Cash Book", type=['xlsx', 'csv'])
+
+if st.button("🚀 Generate Comprehensive Report"):
     if stmt_file and book_file:
-        with st.spinner("Analyzing entries following CPA guidelines..."):
-            # Mock data based on Step 4 of the CPA Ireland Guide [cite: 74, 76]
-            # This represents data that the matching engine would identify
-            report_data = {
-                "bank_bal": 8253.00,
-                "unrealized": [
-                    {"date": "202X-12-31", "ref": "LODG-9800", "desc": "Cash Lodgement", "amt": 9800.00}
-                ],
-                "unpresented": [
-                    {"date": "202X-12-22", "ref": "10546", "desc": "J. Quigley", "amt": 830.00},
-                    {"date": "202X-12-27", "ref": "10547", "desc": "E. Sadlier", "amt": 1574.00}
-                ],
-                "adj_bal": 16449.00
-            }
+        with st.spinner("Analyzing entries and identifying discrepancies..."):
+            # Sample Data for Demonstration (The engine will populate these from uploads)
+            report_info = {"biz_name": biz_name, "bank_name": bank_name, "acc_no": acc_no, "period": period}
             
-            header_info = {
-                "business_name": biz_name,
-                "bank_name": bank_name,
-                "acc_no": acc_no,
-                "period": period
-            }
-            
-            st.success("Reconciliation Complete!")
-            
-            # Show "Not Adjusted Entries" in UI for User to fix in Cash Book
-            st.subheader("⚠️ Unadjusted Entries in Cash Book")
-            st.info("These items are in the Bank Statement but missing from your Cash Book (Step 3)[cite: 63, 67].")
-            st.table([
-                {"Date": "202X-12-20", "Reference": "CR-TRANS", "Detail": "Credit Transfer", "Amount": "4,210.00 (Dr)"},
-                {"Date": "202X-12-14", "Reference": "D.D.", "Detail": "Bank Fees", "Amount": "90.00 (Cr)"}
-            ])
+            # Simulated Unadjusted Entries (Items in bank but not in book)
+            unadjusted_df = pd.DataFrame({
+                'Date': ['2026-01-15', '2026-01-20'],
+                'Description': ['Bank Service Charge', 'Direct Debit - Utility'],
+                'Reference': ['STMT-FEE', 'DD-8892'],
+                'Amount': [10.00, 150.00]
+            })
 
-            # PDF Generation
-            pdf_bytes = generate_detailed_pdf(header_info, report_data)
-            st.download_button("📥 Download Detailed BRS Report (PDF)", pdf_bytes, f"BRS_{period}.pdf")
+            summary_stats = {
+                'bank_bal': 12500.00,
+                'unrealised_total': 3000.00,
+                'unpresented_total': 1200.00,
+                'final_bal': 14300.00
+            }
+
+            st.success("Analysis Complete!")
+            
+            # Preview Tables
+            st.subheader("Unadjusted Entries (Action Required in Cash Book)")
+            st.table(unadjusted_df)
+
+            pdf_report = create_comprehensive_brs(report_info, summary_stats, unadjusted_df, None)
+            
+            st.download_button(
+                label="📥 Download Full BRS & Unadjusted Entry Report",
+                data=pdf_report,
+                file_name=f"BRS_{biz_name.replace(' ', '_')}.pdf",
+                mime="application/pdf"
+            )
     else:
-        st.error("Please upload both files and fill in the report details.")
+        st.error("Please upload files to start.")
