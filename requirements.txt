@@ -4,3 +4,4 @@ thefuzz
 xlsxwriter
 fpdf2
 requests
+openpyxl
