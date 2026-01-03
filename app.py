@@ -6,22 +6,24 @@ from io import BytesIO
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="ReconPro Sri Lanka", layout="wide")
-ACCESS_PASSWORD = "ReconPro2026"  # The password you give customers after they pay
+ACCESS_PASSWORD = "ReconPro2026" 
 
-# --- PAYPAL & AUTHENTICATION UI ---
+# --- SESSION STATE INITIALIZATION ---
+if "reconcile_count" not in st.session_state:
+    st.session_state.reconcile_count = 0  # Tracks trial attempts
 if "authenticated" not in st.session_state:
-    st.session_state["authenticated"] = False
+    st.session_state.authenticated = False
 
-if not st.session_state["authenticated"]:
-    st.title("🏦 Bank Reconciliation Pro")
-    st.subheader("Automate your accounting in seconds.")
+# --- TRIAL & PAYMENT GATE ---
+# If they used their 1 trial and aren't paid, show the paywall
+if st.session_state.reconcile_count >= 1 and not st.session_state.authenticated:
+    st.warning("⚠️ Your free trial attempt has ended.")
+    st.title("🔐 Unlock Unlimited Reconciliations")
     
     col_a, col_b = st.columns(2)
-    
     with col_a:
-        st.write("### 1. Pay to Unlock")
-        st.write("Get instant access for just $10.00 USD.")
-        # PayPal Button Component
+        st.write("### 1. Pay via PayPal")
+        # Your PayPal Button
         paypal_html = f"""
         <div id="paypal-button-container"></div>
         <script src="https://www.paypal.com/sdk/js?client-id=AaXH1xGEvvmsTOUgFg_vWuMkZrAtD0HLzas87T-Hhzn0esGcceV0J9lGEg-ptQlQU0k89J3jyI8MLzQD&currency=USD"></script>
@@ -40,62 +42,60 @@ if not st.session_state["authenticated"]:
             }}).render('#paypal-button-container');
         </script>
         """
-        components.html(paypal_html, height=500)
+        components.html(paypal_html, height=450)
 
     with col_b:
         st.write("### 2. Enter Access Key")
-        pwd_input = st.text_input("Enter the key you received after payment:", type="password")
-        if st.button("Unlock Tool"):
+        pwd_input = st.text_input("Enter the key from your receipt:", type="password")
+        if st.button("Unlock Unlimited Access"):
             if pwd_input == ACCESS_PASSWORD:
-                st.session_state["authenticated"] = True
+                st.session_state.authenticated = True
+                st.success("Access Granted! You can now use the tool as much as you like.")
                 st.rerun()
             else:
-                st.error("Invalid Key. Please complete the PayPal payment.")
+                st.error("Invalid Key.")
     st.stop()
 
-# --- ACTUAL TOOL CODE (Runs only after payment) ---
-st.title("✅ ReconPro Dashboard")
-st.sidebar.success("Account Active")
+# --- THE TOOL ---
+st.title("🏦 Bank Reconciliation Tool")
+if not st.session_state.authenticated:
+    st.info(f"🎁 Free Trial Active: You have used {st.session_state.reconcile_count}/1 free attempts.")
 
-with st.sidebar:
-    st.header("Format Guide")
-    st.write("Upload CSV files with these columns:")
-    st.code("Date, Description, Reference, Debit, Credit")
-    st.markdown("[Convert PDF to CSV Here](https://nanonets.com/bank-statement-converter)")
-
-# File Uploaders
 up1, up2 = st.columns(2)
 with up1:
-    stmt_file = st.file_uploader("Upload Bank Statement", type="csv")
+    stmt_file = st.file_uploader("Upload Bank Statement (CSV)", type="csv")
 with up2:
-    book_file = st.file_uploader("Upload Bank Book", type="csv")
+    book_file = st.file_uploader("Upload Bank Book (CSV)", type="csv")
 
-if stmt_file and book_file:
-    df_stmt = pd.read_csv(stmt_file)
-    df_book = pd.read_csv(book_file)
+if st.button("Run Reconciliation"):
+    if stmt_file and book_file:
+        # Increment trial counter
+        st.session_state.reconcile_count += 1
+        
+        # Load and Process Data
+        df_stmt = pd.read_csv(stmt_file)
+        df_book = pd.read_csv(book_file)
+        
+        # Net Amount Calculation
+        df_stmt['Amount'] = df_stmt['Debit'].fillna(0) - df_stmt['Credit'].fillna(0)
+        df_book['Amount'] = df_book['Debit'].fillna(0) - df_book['Credit'].fillna(0)
 
-    # Calculate net amount
-    df_stmt['Amount'] = df_stmt['Debit'].fillna(0) - df_stmt['Credit'].fillna(0)
-    df_book['Amount'] = df_book['Debit'].fillna(0) - df_book['Credit'].fillna(0)
-
-    # Reconciliation Logic
-    recon = pd.merge(df_stmt, df_book, on=['Reference', 'Amount'], how='outer', indicator=True, suffixes=('_Bank', '_Book'))
-    
-    matched = recon[recon['_merge'] == 'both']
-    missing_book = recon[recon['_merge'] == 'left_only']
-    missing_bank = recon[recon['_merge'] == 'right_only']
-
-    # Show results
-    st.write("### Results")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Perfect Matches", len(matched))
-    c2.metric("Missing in Book", len(missing_book))
-    c3.metric("Pending in Bank", len(missing_bank))
-
-    # Download Report
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        matched.to_excel(writer, sheet_name='Matched', index=False)
-        missing_book.to_excel(writer, sheet_name='Unrecorded', index=False)
-    
-    st.download_button("📥 Download Full Report", output.getvalue(), "Recon_Report.xlsx")
+        # Merge Logic
+        recon = pd.merge(df_stmt, df_book, on=['Reference', 'Amount'], how='outer', indicator=True, suffixes=('_Bank', '_Book'))
+        
+        # Display Results
+        st.write("### Results Preview")
+        st.dataframe(recon[recon['_merge'] == 'both'].head(10)) # Show first 10 matches
+        
+        # Excel Export
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            recon[recon['_merge'] == 'both'].to_excel(writer, sheet_name='Matched', index=False)
+            recon[recon['_merge'] == 'left_only'].to_excel(writer, sheet_name='Missing_In_Book', index=False)
+        
+        st.download_button("📥 Download Full Report", output.getvalue(), "Recon_Report.xlsx")
+        
+        if not st.session_state.authenticated:
+            st.warning("This was your 1 free trial. To run more, please subscribe.")
+    else:
+        st.error("Please upload both files first.")
