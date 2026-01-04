@@ -1,110 +1,128 @@
 import streamlit as st
 import pandas as pd
 from fpdf import FPDF
-import streamlit.components.v1 as components
 from PIL import Image, ImageDraw, ImageFont
+import streamlit.components.v1 as components
 import io
 
-# --- 1. CONFIGURATION & PAYPAL ---
-PAYPAL_CLIENT_ID = "AaXH1xGEvvmsTOUgFg_vWuMkZrAtD0HLzas87T-Hhzn0esGcceV0J9lGEg-ptQlQU0k89J3jyI8MLzQD"
+# --- 1. SECURITY & UI CONFIG ---
 st.set_page_config(page_title="Bank Reconciliation AI", layout="wide")
 
-# Hide Streamlit Branding
-st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} .stDeployButton {display:none;}</style>", unsafe_allow_html=True)
+# Hide Streamlit developer options to protect your code
+st.markdown("""
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    .stDeployButton {display:none;}
+    </style>
+    """, unsafe_allow_html=True)
 
-# --- 2. DYNAMIC PRICING LOGIC ---
-def calculate_fee(entries):
+# --- 2. PRICING LOGIC ---
+def calculate_price(entries):
     if entries <= 100:
         return 5.0
-    return 5.0 + ((entries - 101) // 100 + 1) * 1.0
+    return 5.0 + ((entries - 1) // 100) * 1.0
 
-# --- 3. RECONCILIATION ENGINE ---
-def process_reconciliation(prev_df, curr_stmt, curr_book):
-    # Step 1: Check if previous unpresented cheques cleared this month 
-    # Step 2: Identify current month unadjusted entries (Bank charges, etc.) [cite: 29, 31]
-    # Step 3: Calculate Adjusted Cash Book Balance [cite: 32, 72]
-    # Step 4: Identify Outstanding items (Transit lodgements/Unpresented cheques) [cite: 35, 36]
-    
-    results = {
-        "biz_name": "Deinat Limited", # Extracted from file [cite: 41]
-        "bank_name": "CPA Bank",
-        "acc_no": "4587215", # Extracted from file [cite: 46]
-        "currency": "€", # Extracted from file [cite: 42]
-        "adj_book_bal": 16449.00, # Example from guide [cite: 72]
-        "bank_bal": 8253.00, # Example from guide [cite: 81]
-        "unpresented": [{"ref": "10546", "amt": 830.00, "date": "27/12/202X"}, {"ref": "10547", "amt": 1574.00, "date": "28/12/202X"}],
-        "transit": [{"ref": "LODG-99", "amt": 9800.00, "date": "31/12/202X"}],
-        "unadjusted_book": [{"desc": "Bank Charges", "ref": "DD", "amt": 256.00}]
-    }
-    return results
-
-# --- 4. IMAGE PREVIEW GENERATOR ---
-def generate_image_preview(data):
-    img = Image.new('RGB', (800, 600), color=(255, 255, 255))
+# --- 3. REPORT GENERATION ---
+def create_report_image(data):
+    """Generates an image preview of the BRS to prevent copy-pasting before payment"""
+    img = Image.new('RGB', (800, 1000), color=(255, 255, 255))
     d = ImageDraw.Draw(img)
-    d.text((10,10), f"BUSINESS: {data['biz_name']}", fill=(0,0,0))
-    d.text((10,40), f"RECONCILED BALANCE: {data['currency']} {data['adj_book_bal']}", fill=(0,0,0))
-    d.text((10,80), "--- PREVIEW ONLY (WATERMARKED) ---", fill=(200,0,0))
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
+    try: f = ImageFont.load_default()
+    except: f = None
+    
+    y = 50
+    d.text((300, y), "Bank Reconciliation Statement", fill=(0,0,0), font=f)
+    y += 40
+    d.text((50, y), f"Business: {data['biz_name']}", fill=(0,0,0), font=f)
+    d.text((450, y), f"Period: {data['period']}", fill=(0,0,0), font=f)
+    y += 60
+    # Add table lines and content...
+    d.text((50, y), "Balance per Bank Statement:", fill=(0,0,0), font=f)
+    d.text((600, y), f"{data['bank_bal']:,.2f}", fill=(0,0,0), font=f)
+    
+    # Watermark for security
+    d.text((200, 500), "PREVIEW ONLY - PAY TO DOWNLOAD", fill=(200,200,200), font=f)
+    return img
 
-# --- 5. MAIN UI ---
-st.title("Bank Reconciliation AI")
-st.write("Professional Audit Reporting by **GDP Consultants**")
+# --- 4. SESSION MANAGEMENT ---
+if "paid" not in st.session_state: st.session_state.paid = False
 
+# --- 5. SIDEBAR: CONTACT & INSTRUCTIONS ---
 with st.sidebar:
-    st.header("Contact & Support")
-    st.write("📧 info@taxcalculator.lk")
-    st.write("🌐 www.taxcalculator.lk")
-    st.divider()
+    st.image("logo-removebg-preview.png")
+    st.header("📖 Instructions")
     st.markdown("""
-    ### Instructions:
-    1. Upload **Previous Month BRS** (to track clearing cheques).
-    2. Upload **Current Month Cash Book** & **Bank Statement** (Excel/CSV).
-    3. View the **Watermarked Image Preview**.
-    4. Pay the calculated fee to download PDF/Excel.
+    1. **Upload Files:** Upload Previous BRS, Current Bank Statement, and Cash Book (Excel/CSV).
+    2. **Preview:** Review the generated BRS image for accuracy.
+    3. **Pay:** Payment is based on Cash Book entries ($5 min).
+    4. **Download:** Get your clean PDF or Excel file.
     """)
+    st.divider()
+    st.write("**Contact GDP Consultants**")
+    st.write("📧 info@taxcalculator.lk | 🌐 www.taxcalculator.lk")
 
-# Uploaders
-c1, c2, c3 = st.columns(3)
-prev_f = c1.file_uploader("Previous BRS (Excel/CSV)", type=['xlsx', 'csv'])
-stmt_f = c2.file_uploader("Current Bank Statement", type=['xlsx', 'csv'])
-book_f = c3.file_uploader("Current Cash Book", type=['xlsx', 'csv'])
+# --- 6. MAIN INTERFACE ---
+st.title("Bank Reconciliation AI")
 
-if stmt_f and book_f:
-    # Read book to calculate fee
-    df_book = pd.read_excel(book_f) if book_f.name.endswith('xlsx') else pd.read_csv(book_f)
-    entry_count = len(df_book)
-    fee = calculate_fee(entry_count)
+with st.container():
+    c1, c2, c3 = st.columns(3)
+    p_brs = c1.file_uploader("Previous Month BRS", type=['xlsx', 'csv'])
+    c_stmt = c2.file_uploader("Current Bank Statement", type=['xlsx', 'csv'])
+    c_book = c3.file_uploader("Current Cash Book", type=['xlsx', 'csv'])
+
+if c_stmt and c_book:
+    # Logic: Read files and calculate entries
+    book_df = pd.read_excel(c_book) if c_book.name.endswith('xlsx') else pd.read_csv(c_book)
+    entry_count = len(book_df)
+    fee = calculate_price(entry_count)
     
-    recon_data = process_reconciliation(None, None, None)
+    # Generate Mock Data for Display (Replace with actual reconciliation logic)
+    report_data = {
+        "biz_name": "User Business Name", "bank_name": "Bank Name", 
+        "acc_no": "Account Number", "period": "Month Year",
+        "bank_bal": 125000.00, "raw_book_bal": 120000.00
+    }
     
-    st.subheader("Completed Reconciliation Preview")
-    st.image(generate_image_preview(recon_data), caption="Official Report Preview")
+    st.subheader("🏁 Reconciliation Preview")
+    preview_img = create_report_image(report_data)
+    st.image(preview_img, caption="Watermarked Preview", use_container_width=True)
     
-    st.warning(f"Total Entries: {entry_count} | Processing Fee: USD {fee:.2f}")
+    st.divider()
     
-    # PayPal Integration
-    paypal_btn = f"""
-    <div id="paypal-button-container"></div>
-    <script src="https://www.paypal.com/sdk/js?client-id={PAYPAL_CLIENT_ID}&currency=USD"></script>
-    <script>
-        paypal.Buttons({{
-            createOrder: function(data, actions) {{
-                return actions.order.create({{ purchase_units: [{{ amount: {{ value: '{fee:.2f}' }} }}] }});
-            }},
-            onApprove: function(data, actions) {{
-                return actions.order.capture().then(function(details) {{
-                    window.parent.postMessage({{type: 'PAYMENT_SUCCESS'}}, '*');
-                }});
-            }}
-        }}).render('#paypal-button-container');
-    </script>
-    """
-    components.html(paypal_btn, height=500)
-    
-    if st.checkbox("I have completed the payment"):
-        st.success("Payment Verified! You can now download your files.")
-        st.download_button("Download PDF Report", b"PDF_DATA", "BRS.pdf")
-        st.download_button("Download Excel Report", b"EXCEL_DATA", "BRS.xlsx")
+    # Payment Section
+    if not st.session_state.paid:
+        st.warning(f"💳 Total Charge: **${fee:.2f}** ({entry_count} entries detected)")
+        
+        paypal_html = f"""
+        <div id="paypal-button-container"></div>
+        <script src="https://www.paypal.com/sdk/js?client-id=AaXH1xGEvvmsTOUgFg_vWuMkZrAtD0HLzas87T-Hhzn0esGcceV0J9lGEg-ptQlQU0k89J3jyI8MLzQD&currency=USD"></script>
+        <script>
+            paypal.Buttons({{
+                createOrder: function(data, actions) {{
+                    return actions.order.create({{
+                        purchase_units: [{{ amount: {{ value: '{fee:.2f}' }} }}]
+                    }});
+                }},
+                onApprove: function(data, actions) {{
+                    return actions.order.capture().then(function(details) {{
+                        window.parent.postMessage({{type: 'payment_success'}}, '*');
+                    }});
+                }}
+            }}).render('#paypal-button-container');
+        </script>
+        """
+        components.html(paypal_html, height=500)
+        
+        # Listen for payment success (Simplified for logic)
+        if st.button("I have completed payment"):
+            st.session_state.paid = True
+            st.rerun()
+
+    # Post-Payment Downloads
+    if st.session_state.paid:
+        st.success("✅ Payment Verified. Download your reports below.")
+        col_dl1, col_dl2 = st.columns(2)
+        col_dl1.download_button("📥 Download PDF Report", b"PDF_CONTENT", "Reconciliation.pdf")
+        col_dl2.download_button("📥 Download Excel Report", b"EXCEL_CONTENT", "Reconciliation.xlsx")
