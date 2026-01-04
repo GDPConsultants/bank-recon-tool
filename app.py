@@ -4,127 +4,138 @@ from fpdf import FPDF
 from PIL import Image, ImageDraw, ImageFont
 import streamlit.components.v1 as components
 import io
-import datetime
 
-# --- 1. SETTINGS & SECURITY ---
+# --- 1. ADMIN & SECURITY CONFIG ---
 st.set_page_config(page_title="Bank Reconciliation AI", layout="wide", page_icon="🏦")
 
-# Hide Streamlit UI to protect code and maintain branding
+# Security: Hide "View Source", "Deploy", and Streamlit Menu
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
     .stDeployButton {display:none;}
-    [data-testid="stMetricValue"] {font-size: 1.8rem; color: #1E3A8A;}
-    .main {background-color: #F8FAFC;}
+    .main {background-color: #f9f9f9;}
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. CORE UTILITIES ---
-def calculate_fee(entries):
-    """Monetization logic based on book volume"""
-    if entries < 100: return 5.0
-    return 5.0 + ((entries // 100) * 1.0)
+# --- 2. COMMERCIAL LOGIC ---
+def calculate_price(entries):
+    """USD 5 for first 100, then USD 1 for every 100 extra"""
+    if entries <= 100: return 5.0
+    return 5.0 + ((entries - 1) // 100) * 1.0
 
-def generate_report_image(data):
-    """Generates a high-resolution, watermarked image for previewing results"""
-    # Create a blank white canvas
-    img = Image.new('RGB', (1200, 1600), color=(255, 255, 255))
-    draw = ImageDraw.Draw(img)
+def generate_secure_preview(data):
+    """Generates a detailed image preview (Standard BRS Format)"""
+    img = Image.new('RGB', (1000, 1400), color=(255, 255, 255))
+    d = ImageDraw.Draw(img)
     
-    # Simple lines for table structure
-    draw.line([(50, 250), (1150, 250)], fill="black", width=2)
-    draw.line([(50, 1500), (1150, 1500)], fill="black", width=2)
-
-    # Text Rendering (Note: Using default font for portability)
-    draw.text((450, 50), "BANK RECONCILIATION STATEMENT", fill="black")
-    draw.text((100, 120), f"Business: {data['biz_name']}", fill="black")
-    draw.text((100, 150), f"Bank: {data['bank_name']} ({data['acc_no']})", fill="black")
-    draw.text((100, 180), f"Period Ending: {data['period']}", fill="black")
-
-    # BRS Rows
-    y = 300
-    draw.text((100, y), "Adjusted Balance as per Cash Book", fill="black")
-    draw.text((950, y), f"{data['currency']} {data['adj_book_bal']:,.2f}", fill="black")
+    # Header Section
+    y = 60
+    d.text((350, y), f"{data.get('biz_name', 'BUSINESS NAME')}", fill=(0,0,0))
+    y += 40
+    d.text((380, y), "Bank Reconciliation Statement", fill=(0,0,0))
+    y += 60
     
-    y += 100
-    draw.text((100, y), "Add: Unrealised Deposits (Lodgements in Transit)", fill="black")
-    for d in data['unrealised']:
-        y += 40
-        draw.text((120, y), f"{d['date']} | {d['ref']} | {d['desc']}", fill="gray")
-        draw.text((950, y), f"{d['amt']:,.2f}", fill="black")
+    # Details
+    d.text((100, y), f"Bank: {data.get('bank', 'N/A')}", fill=(0,0,0))
+    d.text((650, y), f"Period: {data.get('period', 'N/A')}", fill=(0,0,0))
+    y += 30
+    d.text((100, y), f"Account No: {data.get('acc_no', 'N/A')}", fill=(0,0,0))
+    y += 70
 
-    y += 100
-    draw.text((100, y), "Less: Unpresented Cheques", fill="black")
-    for c in data['unpresented']:
-        y += 40
-        draw.text((120, y), f"{c['date']} | {c['ref']} | {c['desc']}", fill="gray")
-        draw.text((950, y), f"({c['amt']:,.2f})", fill="black")
+    # Part A: Adjusted Cash Book
+    d.text((100, y), "Part A: Adjusted Cash Book Balance", fill=(0,0,0))
+    y += 40
+    d.text((120, y), "Unadjusted Balance per Cash Book", fill=(0,0,0))
+    d.text((800, y), f"{data['raw_book_bal']:,.2f}", fill=(0,0,0))
+    y += 30
+    for item in data['unadjusted_entries']:
+        d.text((140, y), f" - {item['desc']} ({item['ref']})", fill=(50,50,50))
+        d.text((800, y), f"{item['amt']:,.2f}", fill=(0,0,0))
+        y += 30
+    y += 10
+    d.text((120, y), "ADJUSTED CASH BOOK BALANCE", fill=(0,0,0))
+    d.text((800, y), f"{data['adj_book_bal']:,.2f}", fill=(0,0,0))
+    y += 60
+
+    # Part B: Reconciliation
+    d.text((100, y), "Part B: Reconciliation to Bank Statement", fill=(0,0,0))
+    y += 40
+    d.text((120, y), "Balance per Bank Statement", fill=(0,0,0))
+    d.text((800, y), f"{data['bank_bal']:,.2f}", fill=(0,0,0))
+    y += 40
+    d.text((120, y), "Add: Unrealised Deposits (Lodgements not cleared)", fill=(0,0,0))
+    y += 30
+    for dep in data['transit']:
+        d.text((140, y), f" - {dep['date']} | {dep['ref']}", fill=(50,50,50))
+        d.text((800, y), f"{dep['amt']:,.2f}", fill=(0,0,0))
+        y += 30
+    y += 20
+    d.text((120, y), "Less: Unpresented Cheques", fill=(0,0,0))
+    y += 30
+    for chq in data['unpresented']:
+        d.text((140, y), f" - {chq['date']} | {chq['ref']}", fill=(50,50,50))
+        d.text((800, y), f"({chq['amt']:,.2f})", fill=(0,0,0))
+        y += 30
 
     # Watermark
-    draw.text((300, 800), "PREVIEW - SECURE PAYMENT REQUIRED", fill=(220, 220, 220))
+    d.text((250, 700), "PREVIEW ONLY - SECURE PAYMENT REQUIRED", fill=(210,210,210))
     return img
 
-# --- 3. SIDEBAR & INSTRUCTIONS ---
+# --- 3. UI & SIDEBAR ---
 with st.sidebar:
-    st.title("🏦 GDP AI Recon")
-    st.markdown("---")
+    try: st.image("logo-removebg-preview.png")
+    except: st.warning("Logo file missing on GitHub")
+    
     st.header("📖 Instructions")
-    st.info("""
-    1. **Upload Previous BRS:** The AI checks for uncleared items from last month.
-    2. **Upload Current Data:** Provide your Bank Statement and Cash Book.
-    3. **Review:** Check the generated image for accuracy.
-    4. **Pay & Download:** Use PayPal to unlock official PDF/Excel reports.
+    st.markdown("""
+    1. **Upload Files:** Upload Prev BRS, Current Statement, and Cash Book.
+    2. **Review Image:** Verify the watermarked preview for accuracy.
+    3. **Payment:** Fee is calculated based on entry count.
+    4. **Download:** Get your final PDF/Excel upon payment.
     """)
-    st.markdown("---")
-    st.write("📧 **Support:** info@taxcalculator.lk")
-    st.write("🌐 **Web:** [taxcalculator.lk](http://www.taxcalculator.lk)")
+    st.divider()
+    st.write("**GDP Consultants**")
+    st.write("📧 info@taxcalculator.lk")
+    st.write("🌐 [www.taxcalculator.lk](http://www.taxcalculator.lk)")
 
-# --- 4. DATA UPLOAD & PROCESSING ---
+# --- 4. MAIN WORKFLOW ---
 st.title("Bank Reconciliation AI")
-st.subheader("Automated Professional Financial Auditing")
+st.caption("Professional BRS Automation powered by GDP Consultants")
 
-up1, up2, up3 = st.columns(3)
-prev_month = up1.file_uploader("Previous BRS (Optional)", type=['xlsx', 'csv'])
-bank_stmt = up2.file_uploader("Bank Statement (Current)", type=['xlsx', 'csv'])
-cash_book = up3.file_uploader("Cash Book (Current)", type=['xlsx', 'csv'])
+c1, c2, c3 = st.columns(3)
+prev_f = c1.file_uploader("Previous Month BRS", type=['xlsx', 'csv'])
+stmt_f = c2.file_uploader("Current Bank Statement", type=['xlsx', 'csv'])
+book_f = c3.file_uploader("Current Cash Book", type=['xlsx', 'csv'])
 
-if bank_stmt and cash_book:
-    # 1. Load Data
+if stmt_f and book_f:
+    # Read files
     try:
-        book_df = pd.read_excel(cash_book) if cash_book.name.endswith('xlsx') else pd.read_csv(cash_book)
-        entries = len(book_df)
-        fee = calculate_fee(entries)
+        book_df = pd.read_excel(book_f) if book_f.name.endswith('xlsx') else pd.read_csv(book_f)
+        entry_count = len(book_df)
+        fee = calculate_price(entry_count)
         
-        # 2. Financial Logic Analysis (Placeholder for actual matching engine)
-        st.divider()
-        st.subheader("📊 Financial Analysis Summary")
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Cash Book Entries", entries)
-        m2.metric("Processing Fee", f"USD {fee:.2f}")
-        m3.metric("Status", "Balanced" if entries > 0 else "Analysis Error")
-
-        # 3. Report Data Construction (Dynamic Branding)
+        # (AI LOGIC: Matching & Adjusting occurs here)
+        # Placeholder data for report generation
         report_data = {
-            "biz_name": "USER BUSINESS NAME", "bank_name": "COMMERCIAL BANK", 
-            "acc_no": "ACC-998822", "period": "Dec 2025", "currency": "LKR",
-            "adj_book_bal": 456780.50, "bank_bal": 420000.00,
-            "unrealised": [{"date": "2025-12-31", "ref": "DEP-101", "desc": "Sales Cash", "amt": 50000.00}],
-            "unpresented": [{"date": "2025-12-28", "ref": "CHQ-505", "desc": "Rent Payment", "amt": 13219.50}]
+            "biz_name": "ABC PRIVATE LIMITED", "bank": "COMMERCIAL BANK", "acc_no": "9900881122",
+            "period": "December 2025", "raw_book_bal": 45000.00, "adj_book_bal": 44850.00, "bank_bal": 41000.00,
+            "unadjusted_entries": [{"desc": "Bank Charges", "ref": "SVC", "amt": -150.00}],
+            "transit": [{"date": "2025-12-31", "ref": "DEP-101", "amt": 5000.00}],
+            "unpresented": [{"date": "2025-12-25", "ref": "CHQ-504", "amt": 1150.00}]
         }
 
-        # 4. Preview Display
-        st.markdown("### 🖼️ Document Preview")
-        preview_img = generate_report_image(report_data)
-        st.image(preview_img, caption="Standard CPA Format - Preview Only", use_container_width=True)
-
-        # 5. Payment Gateway
         st.divider()
-        st.warning(f"💳 Payment of **${fee:.2f}** required to download the full PDF and Excel report.")
+        st.subheader("🏁 Automated BRS Preview")
+        preview = generate_secure_preview(report_data)
+        st.image(preview, use_container_width=True)
+
+        # Payment Block
+        st.info(f"🧾 Entries: {entry_count} | **Total Service Fee: USD {fee:.2f}**")
         
-        paypal_code = f"""
-        <div id="paypal-button-container" style="text-align: center;"></div>
+        paypal_btn = f"""
+        <div id="paypal-button-container"></div>
         <script src="https://www.paypal.com/sdk/js?client-id=AaXH1xGEvvmsTOUgFg_vWuMkZrAtD0HLzas87T-Hhzn0esGcceV0J9lGEg-ptQlQU0k89J3jyI8MLzQD&currency=USD"></script>
         <script>
             paypal.Buttons({{
@@ -135,13 +146,13 @@ if bank_stmt and cash_book:
                 }},
                 onApprove: function(data, actions) {{
                     return actions.order.capture().then(function(details) {{
-                        alert('Transaction completed by ' + details.payer.name.given_name);
+                        alert('Payment Verified! Downloading reports...');
                     }});
                 }}
             }}).render('#paypal-button-container');
         </script>
         """
-        components.html(paypal_code, height=450)
+        components.html(paypal_btn, height=500)
 
     except Exception as e:
-        st.error(f"Error reading files: {e}. Please ensure files follow standard column headers.")
+        st.error(f"Error reading data: {e}")
