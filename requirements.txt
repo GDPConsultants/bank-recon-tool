@@ -1,6 +1,7 @@
 streamlit
 pandas
-openpyxl
 fpdf2
-xlsxwriter
-thefuzz
+openpyxl
+requests
+pillow
+imgkit
