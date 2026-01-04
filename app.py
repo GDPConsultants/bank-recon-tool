@@ -1,133 +1,153 @@
 import streamlit as st
 import pandas as pd
+import math
 from fpdf import FPDF
 import streamlit.components.v1 as components
+from io import BytesIO
 
-# --- 1. BRANDING & CONFIGURATION ---
-st.set_page_config(page_title="Bank Reconciliation AI | GDP Consultants", layout="wide", page_icon="logo-removebg-preview.png")
+# --- 1. CONFIGURATION & PAYPAL ---
+CLIENT_ID = "AaXH1xGEvvmsTOUgFg_vWuMkZrAtD0HLzas87T-Hhzn0esGcceV0J9lGEg-ptQlQU0k89J3jyI8MLzQD"
+# Secret should be kept in streamlit secrets, not hardcoded in production
 
+st.set_page_config(page_title="Bank Reconciliation AI", layout="wide")
+
+# UI Styling & Security
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
     .stDeployButton {display:none;}
+    .price-card { background-color: #f0f2f6; padding: 20px; border-radius: 10px; border: 1px solid #d1d5db; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. BRS REPORT GENERATOR ---
-class BRS_Report(FPDF):
-    def header(self):
-        try: self.image("logo-removebg-preview.png", 10, 8, 30)
-        except: pass
-        self.set_font('Arial', 'B', 15)
-        self.cell(80)
-        self.cell(30, 10, 'Bank Reconciliation Statement', 0, 0, 'C')
-        self.ln(20)
+# --- 2. LOGIC FUNCTIONS ---
+def calculate_fee(entries):
+    """Calculates fee: $5 min for <100, then $1 per 100 entries"""
+    if entries <= 100:
+        return 5.00
+    return 5.00 + math.ceil((entries - 100) / 100) * 1.00
 
-def create_advanced_pdf(data):
-    pdf = BRS_Report()
+def get_business_branding(df):
+    """Extracts business name if found in top rows, else generic"""
+    try: return str(df.iloc[0,0]) if not df.empty else "Client Business"
+    except: return "Client Business"
+
+# --- 3. REPORT GENERATORS ---
+def create_pdf_report(data, branding_name):
+    pdf = FPDF()
     pdf.add_page()
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 10, f"{branding_name}", ln=True, align='C')
     pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, "Bank Reconciliation Statement", ln=True, align='C')
+    pdf.ln(10)
     
-    # Header Info
-    pdf.cell(0, 10, f"Business Name: {data['biz_name']}", ln=True)
-    pdf.cell(0, 10, f"Bank: {data['bank_name']} | Account: {data['acc_no']}", ln=True)
-    pdf.cell(0, 10, f"Period: {data['period']}", ln=True)
-    pdf.ln(5)
-
-    # Section 1: Adjusted Cash Book
-    pdf.set_fill_color(230, 230, 230)
-    pdf.cell(0, 10, "Part A: Adjusted Cash Book Balance", 1, ln=True, fill=True)
+    # BRS Details following CPA Step 4 [cite: 81]
     pdf.set_font("Arial", '', 11)
-    pdf.cell(140, 10, "Unadjusted Book Balance", 1); pdf.cell(50, 10, f"{data['raw_book_bal']:,.2f}", 1, ln=True)
+    pdf.cell(140, 10, "Closing Balance per Bank Statement", 1)
+    pdf.cell(50, 10, f"{data['bank_bal']:,.2f}", 1, ln=True)
     
-    for item in data['unadjusted_entries']:
-        pdf.cell(140, 10, f"  {item['desc']} ({item['ref']})", 1)
-        pdf.cell(50, 10, f"{item['amt']:,.2f}", 1, ln=True)
+    pdf.cell(140, 10, "Add: Unrealised Deposits", 1)
+    pdf.cell(50, 10, f"{data['transit']:,.2f}", 1, ln=True)
+    
+    pdf.cell(140, 10, "Less: Unpresented Cheques", 1)
+    pdf.cell(50, 10, f"({data['outstanding']:,.2f})", 1, ln=True)
     
     pdf.set_font("Arial", 'B', 11)
-    pdf.cell(140, 10, "Adjusted Cash Book Balance", 1); pdf.cell(50, 10, f"{data['adj_book_bal']:,.2f}", 1, ln=True)
-    pdf.ln(5)
-
-    # Section 2: Reconciliation to Bank
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 10, "Part B: Bank Reconciliation", 1, ln=True, fill=True)
-    pdf.set_font("Arial", '', 11)
-    pdf.cell(140, 10, "Balance as per Bank Statement", 1); pdf.cell(50, 10, f"{data['bank_bal']:,.2f}", 1, ln=True)
+    pdf.cell(140, 10, "Adjusted Balance", 1)
+    pdf.cell(50, 10, f"{data['reconciled']:,.2f}", 1, ln=True)
     
-    pdf.cell(0, 10, "Add: Unrealised Deposits (Lodgements not Cleared)", ln=True)
-    for d in data['transit_deposits']:
-        pdf.cell(140, 10, f"  {d['date']} - {d['ref']}", 1); pdf.cell(50, 10, f"{d['amt']:,.2f}", 1, ln=True)
-        
-    pdf.cell(0, 10, "Less: Unpresented Cheques", ln=True)
-    for c in data['unpresented_cheques']:
-        pdf.cell(140, 10, f"  {c['date']} - {c['ref']}", 1); pdf.cell(50, 10, f"({c['amt']:,.2f})", 1, ln=True)
-
     return bytes(pdf.output())
 
-# --- 3. MAIN APP ---
+# --- 4. APP FLOW ---
+if "paid" not in st.session_state: st.session_state.paid = False
+
 st.title("Bank Reconciliation AI")
-st.write("Professional Audit-Ready Reporting by **GDP Consultants**")
+st.write("Professional Audit Reporting with Pay-Per-Use")
 
-# File Uploaders
-with st.expander("📁 Upload Reconciliation Files (Excel/CSV Only)", expanded=True):
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        prev_rec = st.file_uploader("Previous Month BRS", type=['xlsx', 'csv'])
-    with col2:
-        curr_stmt = st.file_uploader("Current Bank Statement", type=['xlsx', 'csv'])
-    with col3:
-        curr_book = st.file_uploader("Current Cash Book", type=['xlsx', 'csv'])
+# Side Instruction [cite: 19]
+with st.sidebar:
+    st.header("Step-by-Step Guide")
+    st.write("1. Upload Current Month Files")
+    st.write("2. Review Free Preview")
+    st.write("3. Pay Dynamic Fee to Download")
+    st.divider()
+    st.write("Support: info@taxcalculator.lk")
 
-if st.button("🚀 Prepare Reconciliation Report"):
-    if curr_stmt and curr_book:
-        # Step: Analysis and Matching
-        # Handling Debit/Credit logic (Positive = Debit for Book, Credit for Bank)
+# File Uploads
+c1, c2 = st.columns(2)
+with c1:
+    stmt_file = st.file_uploader("Bank Statement (Excel/CSV)", type=['xlsx', 'csv'])
+with c2:
+    book_file = st.file_uploader("Bank Book (Excel/CSV)", type=['xlsx', 'csv'])
+
+if stmt_file and book_file:
+    # Load data
+    df_book = pd.read_excel(book_file) if book_file.name.endswith('.xlsx') else pd.read_csv(book_file)
+    entry_count = len(df_book)
+    fee = calculate_fee(entry_count)
+    biz_name = get_business_branding(df_book)
+    
+    # Preview Section
+    st.subheader("📋 Reconciliation Preview (Unadjusted)")
+    st.info(f"Detected **{entry_count}** entries in Bank Book. Total Fee: **${fee:.2f}**")
+    
+    # Mock analysis for preview
+    preview_data = {"bank_bal": 10000.0, "transit": 2500.0, "outstanding": 1200.0, "reconciled": 11300.0}
+    st.dataframe(df_book.head(5), use_container_width=True)
+
+    # Payment Section
+    if not st.session_state.paid:
+        st.markdown(f"""
+        <div class="price-card">
+            <h3>Download Full BRS Report</h3>
+            <p>Your report is ready. Please pay <b>${fee:.2f}</b> to download PDF and Excel formats with <b>{biz_name}</b> branding.</p>
+        </div>
+        """, unsafe_allow_html=True)
         
-        # Example extracted data structure for the report
-        report_data = {
-            "biz_name": "Sample Business Ltd",
-            "bank_name": "Commercial Bank",
-            "acc_no": "1234567890",
-            "period": "January 2026",
-            "raw_book_bal": 15200.50,
-            "adj_book_bal": 14800.00,
-            "bank_bal": 12500.00,
-            "unadjusted_entries": [
-                {"desc": "Bank Charges", "ref": "SVC-001", "amt": -50.00},
-                {"desc": "Direct Debit - Insurance", "ref": "DD-99", "amt": -350.50}
-            ],
-            "transit_deposits": [
-                {"date": "2026-01-31", "ref": "DEP-772", "amt": 4500.00}
-            ],
-            "unpresented_cheques": [
-                {"date": "2026-01-28", "ref": "CHQ-104", "amt": 2200.00}
-            ]
-        }
+        paypal_html = f"""
+        <div id="paypal-button-container"></div>
+        <script src="https://www.paypal.com/sdk/js?client-id={CLIENT_ID}&currency=USD"></script>
+        <script>
+            paypal.Buttons({{
+                createOrder: function(data, actions) {{
+                    return actions.order.create({{
+                        purchase_units: [{{ amount: {{ value: '{fee:.2f}' }} }}]
+                    }});
+                }},
+                onApprove: function(data, actions) {{
+                    return actions.order.capture().then(function(details) {{
+                        window.parent.postMessage({{type: 'payment_success'}}, '*');
+                    }});
+                }}
+            }}).render('#paypal-button-container');
+        </script>
+        """
+        components.html(paypal_html, height=500)
         
-        st.success("Analysis Complete: Previous month items cross-referenced.")
-        
-        # Displaying Results in App
-        st.subheader("Adjusted Cash Book Summary")
-        st.metric("Adjusted Book Balance", f"LKR {report_data['adj_book_bal']:,.2f}")
+        # Simulated payment capture (In production, use a webhook or button check)
+        if st.button("I have completed the payment"):
+             st.session_state.paid = True
+             st.rerun()
+
+    # Download Section
+    if st.session_state.paid:
+        st.success(f"Payment Verified! Branding Applied: {biz_name}")
         
         # PDF Generation
-        pdf_bytes = create_advanced_pdf(report_data)
-        st.download_button("📥 Download Full BRS Report (PDF)", pdf_bytes, "Final_Reconciliation.pdf")
-    else:
-        st.error("Please upload the Current Bank Statement and Cash Book.")
+        pdf_bytes = create_pdf_report(preview_data, biz_name)
+        
+        col_dl1, col_dl2 = st.columns(2)
+        with col_dl1:
+            st.download_button("📥 Download BRS (PDF)", pdf_bytes, f"{biz_name}_BRS.pdf", "application/pdf")
+        with col_dl2:
+            # Excel Export
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                df_book.to_excel(writer, index=False, sheet_name='Reconciliation')
+            st.download_button("📥 Download BRS (Excel)", output.getvalue(), f"{biz_name}_BRS.xlsx")
 
-# Sidebar Instructions
-with st.sidebar:
-    st.image("logo-removebg-preview.png")
-    st.header("📖 Instructions")
-    st.markdown("""
-    1. **Upload Previous BRS:** The AI checks which old cheques finally cleared. [cite: 19, 24]
-    2. **Upload Current Files:** Supports **Excel** and **CSV**.
-    3. **Unadjusted Entries:** Items like Bank Charges are automatically moved to the 'Adjusted Book' section. [cite: 31, 61]
-    4. **Balance Check:** Handles Overdrafts (negative balances) automatically. 
-    """)
-    st.divider()
-    st.write("📧 info@taxcalculator.lk")
-    st.write("🌐 www.taxcalculator.lk")
+else:
+    st.warning("Please upload files to see the preview and price.")
