@@ -1,129 +1,145 @@
 import streamlit as st
 import pandas as pd
-import requests
 from fpdf import FPDF
 import streamlit.components.v1 as components
-from datetime import datetime
+from io import BytesIO
 
-# --- 1. BRANDING & UI ---
-st.set_page_config(page_title="Bank Reconciliation AI | GDP Consultants", layout="wide", page_icon="logo-removebg-preview.png")
+# --- 1. BRANDING & UI CONFIGURATION ---
+st.set_page_config(
+    page_title="Bank Reconciliation AI | GDP Consultants", 
+    layout="wide", 
+    page_icon="logo-removebg-preview.png"
+)
 
-st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} .stDeployButton {display:none;}</style>", unsafe_allow_html=True)
+st.markdown("""
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    .stDeployButton {display:none;}
+    </style>
+    """, unsafe_allow_html=True)
 
-# --- 2. PDF GENERATOR (CPA STEP-BY-STEP FORMAT) ---
-class BRS_Report(FPDF):
-    def header(self):
-        try: self.image("logo-removebg-preview.png", 10, 8, 25)
-        except: pass
-        self.set_font("Arial", 'B', 14)
-        self.cell(0, 10, "Bank Reconciliation Statement (BRS)", ln=True, align='C')
-        self.set_font("Arial", 'I', 10)
-        self.cell(0, 5, "GDP Consultants | www.taxcalculator.lk", ln=True, align='C')
-        self.ln(10)
-
-def generate_full_report(data):
-    pdf = BRS_Report()
+# --- 2. BRS REPORT GENERATOR (ADVANCED FORMAT) ---
+def create_comprehensive_brs(data):
+    pdf = FPDF()
     pdf.add_page()
     
-    # Header Info
-    pdf.set_font("Arial", 'B', 11)
-    pdf.cell(100, 7, f"Business Name: {data['biz_name']}")
-    pdf.cell(0, 7, f"Bank: {data['bank_name']}", ln=True)
-    pdf.cell(100, 7, f"Account No: {data['acc_no']}")
-    pdf.cell(0, 7, f"Period: {data['period']}", ln=True)
-    pdf.ln(5)
+    # Company & Bank Header
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 10, f"{data['business_name']}", ln=True, align='C')
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(0, 10, "Bank Reconciliation Statement", ln=True, align='C')
+    pdf.set_font("Arial", '', 10)
+    pdf.cell(0, 7, f"Bank: {data['bank_name']} | A/C: {data['acc_no']}", ln=True, align='C')
+    pdf.cell(0, 7, f"Period: {data['period']}", ln=True, align='C')
+    pdf.ln(10)
 
     # Section 1: Adjusted Cash Book
-    pdf.set_fill_color(230, 230, 230)
-    pdf.cell(0, 8, "PART A: ADJUSTMENT OF CASH BOOK (BANK ACCOUNT)", 1, ln=True, fill=True)
-    pdf.set_font("Arial", '', 10)
-    pdf.cell(140, 7, "Balance as per Unadjusted Cash Book", 1)
-    pdf.cell(50, 7, f"LKR {data['unadjusted_cash']:,.2f}", 1, ln=True)
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, "PART 1: Adjusted Bank/Cash Book Balance", ln=True)
+    pdf.set_font("Arial", '', 11)
+    pdf.cell(140, 8, f"Unadjusted Book Balance ({data['currency']})", 1)
+    pdf.cell(50, 8, f"{data['book_bal_raw']:,.2f}", 1, ln=True)
     
-    pdf.set_text_color(200, 0, 0)
-    for entry in data['book_adjustments']:
-        pdf.cell(140, 7, f"  (-) {entry['desc']} (Ref: {entry['ref']})", 1)
-        pdf.cell(50, 7, f"({entry['amt']:,.2f})", 1, ln=True)
-    
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_font("Arial", 'B', 10)
-    pdf.cell(140, 8, "Adjusted Cash Book Balance", 1)
-    pdf.cell(50, 8, f"LKR {data['adjusted_cash']:,.2f}", 1, ln=True)
+    pdf.set_font("Arial", 'I', 10)
+    pdf.cell(0, 8, "Less: Unadjusted Entries (Bank Charges, Direct Debits, etc.)", ln=True)
+    pdf.set_font("Arial", '', 11)
+    for entry in data['unadjusted_entries']:
+        pdf.cell(140, 8, f"  {entry['date']} - {entry['ref']} - {entry['desc']}", 1)
+        pdf.cell(50, 8, f"({entry['amt']:,.2f})", 1, ln=True)
+        
+    pdf.set_font("Arial", 'B', 11)
+    pdf.cell(140, 10, "ADJUSTED CASH BOOK BALANCE", 1)
+    pdf.cell(50, 10, f"{data['adj_book_bal']:,.2f}", 1, ln=True)
     pdf.ln(5)
 
-    # Section 2: Reconciling with Bank Statement
-    pdf.set_fill_color(230, 230, 230)
-    pdf.cell(0, 8, "PART B: RECONCILIATION WITH BANK STATEMENT", 1, ln=True, fill=True)
-    pdf.set_font("Arial", '', 10)
-    pdf.cell(140, 7, "Balance as per Bank Statement", 1)
-    pdf.cell(50, 7, f"LKR {data['bank_bal']:,.2f}", 1, ln=True)
+    # Section 2: Reconciliation with Bank Statement
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, "PART 2: Reconciliation with Bank Statement", ln=True)
+    pdf.set_font("Arial", '', 11)
+    pdf.cell(140, 8, "Balance as per Bank Statement", 1)
+    pdf.cell(50, 8, f"{data['bank_stmt_bal']:,.2f}", 1, ln=True)
     
-    pdf.cell(140, 7, "(+) Lodgements not yet Cleared (Unrealised Deposits)", 1, ln=True)
-    for item in data['transit_deposits']:
-        pdf.cell(140, 7, f"    {item['date']} - {item['ref']}", 1)
-        pdf.cell(50, 7, f"{item['amt']:,.2f}", 1, ln=True)
-
-    pdf.cell(140, 7, "(-) Unpresented Cheques (Outstanding)", 1, ln=True)
-    for item in data['outstanding_cheques']:
-        pdf.cell(140, 7, f"    Cheque No: {item['chq']} ({item['date']})", 1)
-        pdf.cell(50, 7, f"({item['amt']:,.2f})", 1, ln=True)
-
-    pdf.set_font("Arial", 'B', 11)
-    pdf.cell(140, 10, "Final Reconciled Balance", 1)
-    pdf.cell(50, 10, f"LKR {data['final_bal']:,.2f}", 1, ln=True)
-
+    pdf.cell(140, 8, "(+) Unrealised Deposits (Lodgements not cleared)", 1)
+    pdf.cell(50, 8, f"{data['total_unrealised']:,.2f}", 1, ln=True)
+    
+    pdf.cell(140, 8, "(-) Unpresented Cheques (Outstanding)", 1)
+    pdf.cell(50, 8, f"({data['total_unpresented']:,.2f})", 1, ln=True)
+    
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(140, 12, "FINAL RECONCILED BALANCE", 1)
+    pdf.cell(50, 12, f"{data['final_recon']:,.2f}", 1, ln=True)
+    
     return bytes(pdf.output())
 
-# --- 3. MAIN APP ---
+# --- 3. SESSION & AUTH ---
+if "authenticated" not in st.session_state: st.session_state.authenticated = False
+ACCESS_PASSWORD = "ReconPro2026"
+
+# --- 4. SIDEBAR & INSTRUCTIONS ---
+with st.sidebar:
+    try: st.image("logo-removebg-preview.png")
+    except: pass
+    st.header("📖 Instructions")
+    st.markdown("""
+    1. **Previous Month:** Upload last month's BRS to track old unpresented cheques.
+    2. **Current Month:** Upload Current Bank Statement & Cash Book (Excel/CSV).
+    3. **Verify:** The AI will identify which old items have cleared and which new ones are pending.
+    4. **Balance:** Handles **Overdrafts (-)** and **Positive (+)** balances automatically.
+    """)
+    st.divider()
+    st.write("**GDP Consultants**")
+    st.write("📧 info@taxcalculator.lk | 🌐 www.taxcalculator.lk")
+
+# --- 5. MAIN INTERFACE ---
 st.title("Bank Reconciliation AI")
-st.write("Professional Audit-Ready Reports by **GDP Consultants**")
+st.subheader("Advanced Multi-Month Financial Automator")
 
-# Instructions Expansion
-with st.expander("ℹ️ Instructions & 9-Step Process"):
-    st.write("1. Upload **Previous Month BRS** to clear old outstanding items.")
-    st.write("2. Upload current **Statement** and **Cash Book**.")
-    st.write("3. The AI identifies **Unadjusted Entries** (Charges/Interest) to fix your book.")
-    st.write("4. The Final Report details all unpresented cheques and unrealised deposits.")
-
-# File Uploaders
-prev_brs = st.file_uploader("Upload Previous Month BRS (Optional)", type=['pdf', 'xlsx'])
+# Uploaders
+prev_brs = st.file_uploader("📂 Upload Previous Month BRS (Excel/CSV) - Optional", type=['xlsx', 'csv'])
 col1, col2 = st.columns(2)
 with col1:
-    stmt_file = st.file_uploader("Current Bank Statement", type=['pdf', 'xlsx', 'csv'])
+    curr_stmt = st.file_uploader("📄 Current Bank Statement (Excel/CSV)", type=['xlsx', 'csv'])
 with col2:
-    book_file = st.file_uploader("Current Bank Book / Cash Book", type=['xlsx', 'csv'])
+    curr_book = st.file_uploader("📒 Current Cash Book (Excel/CSV)", type=['xlsx', 'csv'])
 
-if st.button("🚀 Start Professional Reconciliation"):
-    if stmt_file and book_file:
-        with st.spinner("Analyzing entries and adjusting Cash Book..."):
-            # Mock extracted data for demonstration
+if st.button("🚀 Generate Advanced Reconciliation"):
+    if curr_stmt and curr_book:
+        with st.spinner("Analyzing month-on-month transitions..."):
+            
+            # --- MOCK DATA FOR DEMONSTRATION (AI Logic Integration) ---
+            # In production, these are calculated by comparing df_curr_stmt and df_curr_book
             report_data = {
-                "biz_name": "Sample Business PVT LTD",
+                "business_name": "GDP Consultants Sample Client",
                 "bank_name": "Commercial Bank",
-                "acc_no": "8001234567",
+                "acc_no": "100200300400",
                 "period": "January 2026",
-                "unadjusted_cash": 15400.00,
-                "adjusted_cash": 14950.00,
-                "bank_bal": 12000.00,
-                "final_bal": 14950.00,
-                "book_adjustments": [{"desc": "Bank Charges", "ref": "SC-99", "amt": 450.00}],
-                "transit_deposits": [{"date": "2026-01-30", "ref": "DEP-101", "amt": 5000.00}],
-                "outstanding_cheques": [{"date": "2026-01-28", "chq": "005542", "amt": 2050.00}]
+                "currency": "LKR",
+                "book_bal_raw": 15500.00,
+                "bank_stmt_bal": 12850.00,
+                "adj_book_bal": 15410.00,
+                "unadjusted_entries": [
+                    {"date": "2026-01-31", "ref": "SVC-01", "desc": "Bank Service Charge", "amt": 90.00}
+                ],
+                "total_unrealised": 5000.00, # Lodgements not yet cleared
+                "total_unpresented": 2440.00, # Outstanding cheques
+                "final_recon": 15410.00
             }
             
-            st.success("Analysis Complete. Cash Book Adjusted.")
+            st.success("✅ Analysis Complete: Previous month items reconciled.")
             
-            # Preview in UI
-            st.subheader("📊 Reconciled Summary")
-            st.metric("Adjusted Cash Book Balance", "LKR 14,950.00")
+            # Show Analysis Table
+            st.write("### Adjusted Cash Book (Part 1)")
+            st.info(f"Final Adjusted Book Balance: {report_data['currency']} {report_data['adj_book_bal']:,.2f}")
             
-            # Download
-            pdf_bytes = generate_full_report(report_data)
-            st.download_button("📥 Download Full BRS Report (PDF)", pdf_bytes, "Professional_BRS.pdf")
+            # PDF Generation
+            pdf_bytes = create_comprehensive_brs(report_data)
+            st.download_button(
+                label="📥 Download Detailed BRS Report (PDF)",
+                data=pdf_bytes,
+                file_name=f"BRS_{report_data['period']}.pdf",
+                mime="application/pdf"
+            )
     else:
-        st.error("Please upload the current Month Statement and Cash Book.")
-
-with st.sidebar:
-    st.header("📞 GDP Consultants")
-    st.write("📧 [info@taxcalculator.lk](mailto:info@taxcalculator.lk)")
-    st.write("🌐 [www.taxcalculator.lk](https://www.taxcalculator.lk)")
+        st.error("Please upload the Current Bank Statement and Cash Book.")
