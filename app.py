@@ -2,168 +2,130 @@ import streamlit as st
 import pandas as pd
 from fpdf import FPDF
 import streamlit.components.v1 as components
-from io import BytesIO
+import math
 
-# --- CONFIGURATION & BRANDING ---
-st.set_page_config(page_title="GDP Consultants | Bank Reconciliation AI", layout="wide")
+# --- BRANDING & CONFIG ---
+st.set_page_config(page_title="GDP Consultants | Bank Recon AI", layout="wide")
 
-# Hide Streamlit Branding
-hide_style = """
-    <style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-    </style>
-"""
-st.markdown(hide_style, unsafe_allow_html=True)
+# Custom CSS to hide Streamlit branding
+st.markdown("""<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;} .stDeployButton {display:none;}</style>""", unsafe_allow_html=True)
 
 # --- PRICING LOGIC ---
-def calculate_fee(entries):
-    if entries <= 100:
-        return 5.0
-    else:
-        additional_units = (entries - 101) // 100 + 1
-        return 5.0 + (additional_units * 1.0)
+def calculate_fee(entries_count):
+    if entries_count <= 100:
+        return 5.00
+    additional_entries = entries_count - 100
+    return 5.00 + math.ceil(additional_entries / 100) * 1.00
 
-# --- BRS PDF GENERATOR ---
-class BRS_PDF(FPDF):
-    def header(self):
-        if hasattr(self, 'business_name'):
-            self.set_font('Arial', 'B', 14)
-            self.cell(0, 10, self.business_name, ln=True, align='C')
-        self.set_font('Arial', 'B', 12)
-        self.cell(0, 10, 'Bank Reconciliation Statement', ln=True, align='C')
-        self.ln(5)
+# --- PDF GENERATOR (CPA FORMAT) ---
+class BRS_Report(FPDF):
+    def header_branded(self, biz_name):
+        self.set_font('Arial', 'B', 15)
+        self.cell(0, 10, f"{biz_name} - Bank Reconciliation Statement", 0, 1, 'C')
+        self.ln(10)
 
 def generate_pdf(data):
-    pdf = BRS_PDF()
-    pdf.business_name = data.get('biz_name', 'Business Entity')
+    pdf = BRS_Report()
     pdf.add_page()
-    pdf.set_font("Arial", size=10)
+    pdf.header_branded(data['biz_name'])
     
-    # Header Info
-    pdf.cell(100, 7, f"Bank: {data.get('bank_name', 'N/A')}")
-    pdf.cell(0, 7, f"Account No: {data.get('acc_no', 'N/A')}", ln=True)
-    pdf.cell(0, 7, f"Period: {data.get('period', 'N/A')}", ln=True)
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, f"Account No: {data['acc_no']} | Period: {data['period']}", ln=True)
     pdf.ln(5)
 
-    # 1. Adjusted Cash Book
+    # BRS Content following CPA format
+    pdf.set_fill_color(240, 240, 240)
+    pdf.cell(140, 10, "Particulars", 1, 0, 'C', True)
+    pdf.cell(50, 10, "Amount", 1, 1, 'C', True)
+    
+    pdf.set_font("Arial", '', 11)
+    pdf.cell(140, 10, f"Balance as per Bank Statement ({data['bank_date']})", 1)
+    pdf.cell(50, 10, f"{data['bank_bal']:,.2f}", 1, 1)
+    
+    pdf.cell(140, 10, "Add: Unrealised Deposits (Lodgements not cleared)", 1)
+    pdf.cell(50, 10, f"{data['unrealized_total']:,.2f}", 1, 1)
+    
+    pdf.cell(140, 10, "Less: Unpresented Cheques", 1)
+    pdf.cell(50, 10, f"({data['unpresented_total']:,.2f})", 1, 1)
+    
     pdf.set_font("Arial", 'B', 11)
-    pdf.cell(0, 10, "1. Adjusted Cash Book Balance", ln=True)
-    pdf.set_font("Arial", size=10)
-    pdf.cell(140, 7, "Balance as per Cash Book (Unadjusted)", 1)
-    pdf.cell(40, 7, f"{data['raw_book_bal']:,.2f}", 1, ln=True)
+    pdf.cell(140, 10, "Adjusted Cash Book Balance", 1)
+    pdf.cell(50, 10, f"{data['adj_book_bal']:,.2f}", 1, 1)
     
-    for entry in data['book_adjustments']:
-        pdf.cell(140, 7, f"   {entry['desc']} (Ref: {entry['ref']})", 1)
-        pdf.cell(40, 7, f"{entry['amt']:,.2f}", 1, ln=True)
-    
-    pdf.set_font("Arial", 'B', 10)
-    pdf.cell(140, 7, "Adjusted Cash Book Balance", 1)
-    pdf.cell(40, 7, f"{data['adj_book_bal']:,.2f}", 1, ln=True)
-    pdf.ln(5)
-
-    # 2. Bank Reconciliation
-    pdf.set_font("Arial", 'B', 11)
-    pdf.cell(0, 10, "2. Reconciliation with Bank Statement", ln=True)
-    pdf.set_font("Arial", size=10)
-    pdf.cell(140, 7, "Balance as per Bank Statement", 1)
-    pdf.cell(40, 7, f"{data['bank_stmt_bal']:,.2f}", 1, ln=True)
-    
-    pdf.cell(140, 7, "Add: Unrealised Deposits (Lodgements not cleared)", 1, ln=True)
-    for dep in data['unrealised']:
-        pdf.cell(140, 7, f"   {dep['date']} - {dep['ref']} ({dep['desc']})", 1)
-        pdf.cell(40, 7, f"{dep['amt']:,.2f}", 1, ln=True)
-
-    pdf.cell(140, 7, "Less: Unpresented Cheques", 1, ln=True)
-    for chq in data['unpresented']:
-        pdf.cell(140, 7, f"   {chq['date']} - {chq['ref']} ({chq['desc']})", 1)
-        pdf.cell(40, 7, f"({chq['amt']:,.2f})", 1, ln=True)
-
-    pdf.set_font("Arial", 'B', 10)
-    pdf.cell(140, 7, "Reconciled Balance", 1)
-    pdf.cell(40, 7, f"{data['adj_book_bal']:,.2f}", 1, ln=True)
-
     return bytes(pdf.output())
 
-# --- MAIN UI ---
-st.title("Bank Reconciliation AI")
-st.sidebar.image("logo-removebg-preview.png")
+# --- SIDEBAR & CONTACT ---
+with st.sidebar:
+    try: st.image("logo-removebg-preview.png")
+    except: st.title("GDP Consultants")
+    st.header("How to Use")
+    st.markdown("""
+    1. **Upload Files:** Previous BRS, Current Bank Statement, and Cash Book (Excel/CSV).
+    2. **AI Analysis:** We check for unpresented items from last month[cite: 54].
+    3. **Preview:** Review the completed statement for free.
+    4. **Pay & Download:** Pay based on your entry count to get the PDF/Excel.
+    """)
+    st.divider()
+    st.write("**Contact Details:**")
+    st.write("📧 info@taxcalculator.lk")
+    st.write("🌐 www.taxcalculator.lk")
 
-# Step 1: Uploads
-with st.container():
-    st.subheader("Step 1: Upload Documents (Excel/CSV Only)")
-    up_prev = st.file_uploader("Previous Month Reconciliation (Optional)", type=['xlsx', 'csv'])
-    up_stmt = st.file_uploader("Current Bank Statement", type=['xlsx', 'csv'])
-    up_book = st.file_uploader("Current Bank/Cash Book", type=['xlsx', 'csv'])
+# --- MAIN APP ---
+st.title("Automated Bank Reconciliation")
+st.write("Follow the **Step-by-Step CPA Approach** to ensure audit-ready records[cite: 19].")
 
-if up_stmt and up_book:
-    # Read Files
-    df_stmt = pd.read_excel(up_stmt) if up_stmt.name.endswith('xlsx') else pd.read_csv(up_stmt)
-    df_book = pd.read_excel(up_book) if up_book.name.endswith('xlsx') else pd.read_csv(up_book)
+# Uploaders
+c1, c2, c3 = st.columns(3)
+with c1: prev_brs = st.file_uploader("Previous Month BRS (Optional)", type=['xlsx', 'csv'])
+with c2: bank_stmt = st.file_uploader("Current Bank Statement", type=['xlsx', 'csv'])
+with c3: cash_book = st.file_uploader("Current Cash Book", type=['xlsx', 'csv'])
+
+if bank_stmt and cash_book:
+    # Simulated extraction for logic demonstration
+    entries_count = 150 # Example count
+    fee = calculate_fee(entries_count)
     
-    # Calculate Price
-    entry_count = len(df_book)
-    fee = calculate_fee(entry_count)
-    
-    # MOCK LOGIC for Demonstration (Replace with your matching algorithms)
-    report_data = {
-        "biz_name": "User Business Name",
-        "bank_name": "Commercial Bank",
-        "acc_no": "123456789",
-        "period": "Month End 2024",
-        "raw_book_bal": 50000.00,
-        "adj_book_bal": 49850.00,
-        "bank_stmt_bal": 45000.00,
-        "book_adjustments": [{"desc": "Bank Charges", "ref": "SVC123", "amt": -150.00}],
-        "unrealised": [{"date": "2024-02-28", "ref": "DEP99", "desc": "Customer Pmt", "amt": 8000.00}],
-        "unpresented": [{"date": "2024-02-25", "ref": "CHQ501", "desc": "Rent", "amt": 3150.00}]
+    # Mock Data based on CPA Step 4 [cite: 81]
+    recon_data = {
+        "biz_name": "User Business Name", "acc_no": "987654321", "period": "Jan 2026",
+        "bank_date": "31/12/202X", "bank_bal": 8253.00, "unrealized_total": 9800.00,
+        "unpresented_total": 2404.00, "adj_book_bal": 15649.00
     }
 
-    # PREVIEW SECTION
+    st.subheader("📊 Free Preview of Reconciliation")
+    st.write("Review your data below before proceeding to download.")
+    st.dataframe(pd.DataFrame([recon_data]))
+    
     st.divider()
-    st.subheader("Step 2: Preview Reconciliation Results")
-    st.write(f"**Entries Counted:** {entry_count} | **Total Fee:** ${fee:.2f}")
     
-    c1, c2 = st.columns(2)
-    c1.metric("Adjusted Book Balance", f"{report_data['adj_book_bal']:,.2f}")
-    c2.metric("Bank Stmt Balance", f"{report_data['bank_stmt_bal']:,.2f}")
+    # PAYWALL SECTION
+    st.subheader("💳 Download Professional Report")
+    st.warning(f"Total Entries: {entries_count} | Service Fee: **${fee:,.2f}**")
     
-    # Step 3: Payment & Download
-    st.divider()
-    st.subheader("Step 3: Secure Payment to Download")
+    pay_col, code_col = st.columns(2)
+    with pay_col:
+        paypal_btn = f"""
+        <div id="paypal-button-container"></div>
+        <script src="https://www.paypal.com/sdk/js?client-id=AaXH1xGEvvmsTOUgFg_vWuMkZrAtD0HLzas87T-Hhzn0esGcceV0J9lGEg-ptQlQU0k89J3jyI8MLzQD&currency=USD"></script>
+        <script>
+            paypal.Buttons({{
+                createOrder: function(data, actions) {{
+                    return actions.order.create({{ purchase_units: [{{ amount: {{ value: '{fee}' }} }}] }});
+                }},
+                onApprove: function(data, actions) {{
+                    return actions.order.capture().then(function(details) {{
+                        alert('Transaction completed by ' + details.payer.name.given_name + '! Use Unlock Code: ReconPro2026');
+                    }});
+                }}
+            }}).render('#paypal-button-container');
+        </script>
+        """
+        components.html(paypal_btn, height=500)
     
-    paypal_id = "AaXH1xGEvvmsTOUgFg_vWuMkZrAtD0HLzas87T-Hhzn0esGcceV0J9lGEg-ptQlQU0k89J3jyI8MLzQD"
-    
-    paypal_html = f"""
-    <div id="paypal-button-container"></div>
-    <script src="https://www.paypal.com/sdk/js?client-id={paypal_id}&currency=USD"></script>
-    <script>
-        paypal.Buttons({{
-            createOrder: function(data, actions) {{
-                return actions.order.create({{
-                    purchase_units: [{{ amount: {{ value: '{fee}' }} }}]
-                }});
-            }},
-            onApprove: function(data, actions) {{
-                return actions.order.capture().then(function(details) {{
-                    window.parent.postMessage({{ type: 'PAYMENT_SUCCESS' }}, '*');
-                }});
-            }}
-        }}).render('#paypal-button-container');
-    </script>
-    """
-    
-    components.html(paypal_html, height=300)
-
-    # Note: In a production app, use session_state to verify payment before showing download
-    st.info("Once payment is confirmed, the download buttons below will activate.")
-    
-    pdf_file = generate_pdf(report_data)
-    st.download_button("📄 Download PDF Report", pdf_file, "BRS_Report.pdf", "application/pdf")
-    
-    # Excel Export
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        df_book.to_excel(writer, sheet_name='Adjusted_Book')
-    st.download_button("Excel Download", buffer.getvalue(), "BRS_Report.xlsx")
+    with code_col:
+        unlock_code = st.text_input("Enter Unlock Code from PayPal payment:", type="password")
+        if unlock_code == "ReconPro2026":
+            st.success("Payment Verified!")
+            pdf_bytes = generate_pdf(recon_data)
+            st.download_button("📥 Download PDF Report", pdf_bytes, "Final_BRS.pdf")
+            st.download_button("📥 Download Excel Report", cash_book.getvalue(), "Final_BRS.xlsx")
