@@ -1,6 +1,6 @@
 streamlit
 pandas
-fpdf2
 openpyxl
+fpdf2
 requests
-paypalrestsdk
+pillow
