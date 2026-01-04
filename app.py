@@ -1,153 +1,169 @@
 import streamlit as st
 import pandas as pd
-import math
 from fpdf import FPDF
 import streamlit.components.v1 as components
 from io import BytesIO
 
-# --- 1. CONFIGURATION & PAYPAL ---
-CLIENT_ID = "AaXH1xGEvvmsTOUgFg_vWuMkZrAtD0HLzas87T-Hhzn0esGcceV0J9lGEg-ptQlQU0k89J3jyI8MLzQD"
-# Secret should be kept in streamlit secrets, not hardcoded in production
+# --- CONFIGURATION & BRANDING ---
+st.set_page_config(page_title="GDP Consultants | Bank Reconciliation AI", layout="wide")
 
-st.set_page_config(page_title="Bank Reconciliation AI", layout="wide")
-
-# UI Styling & Security
-st.markdown("""
+# Hide Streamlit Branding
+hide_style = """
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
-    .stDeployButton {display:none;}
-    .price-card { background-color: #f0f2f6; padding: 20px; border-radius: 10px; border: 1px solid #d1d5db; }
     </style>
-    """, unsafe_allow_html=True)
+"""
+st.markdown(hide_style, unsafe_allow_html=True)
 
-# --- 2. LOGIC FUNCTIONS ---
+# --- PRICING LOGIC ---
 def calculate_fee(entries):
-    """Calculates fee: $5 min for <100, then $1 per 100 entries"""
     if entries <= 100:
-        return 5.00
-    return 5.00 + math.ceil((entries - 100) / 100) * 1.00
+        return 5.0
+    else:
+        additional_units = (entries - 101) // 100 + 1
+        return 5.0 + (additional_units * 1.0)
 
-def get_business_branding(df):
-    """Extracts business name if found in top rows, else generic"""
-    try: return str(df.iloc[0,0]) if not df.empty else "Client Business"
-    except: return "Client Business"
+# --- BRS PDF GENERATOR ---
+class BRS_PDF(FPDF):
+    def header(self):
+        if hasattr(self, 'business_name'):
+            self.set_font('Arial', 'B', 14)
+            self.cell(0, 10, self.business_name, ln=True, align='C')
+        self.set_font('Arial', 'B', 12)
+        self.cell(0, 10, 'Bank Reconciliation Statement', ln=True, align='C')
+        self.ln(5)
 
-# --- 3. REPORT GENERATORS ---
-def create_pdf_report(data, branding_name):
-    pdf = FPDF()
+def generate_pdf(data):
+    pdf = BRS_PDF()
+    pdf.business_name = data.get('biz_name', 'Business Entity')
     pdf.add_page()
-    pdf.set_font("Arial", 'B', 16)
-    pdf.cell(0, 10, f"{branding_name}", ln=True, align='C')
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 10, "Bank Reconciliation Statement", ln=True, align='C')
-    pdf.ln(10)
+    pdf.set_font("Arial", size=10)
     
-    # BRS Details following CPA Step 4 [cite: 81]
-    pdf.set_font("Arial", '', 11)
-    pdf.cell(140, 10, "Closing Balance per Bank Statement", 1)
-    pdf.cell(50, 10, f"{data['bank_bal']:,.2f}", 1, ln=True)
-    
-    pdf.cell(140, 10, "Add: Unrealised Deposits", 1)
-    pdf.cell(50, 10, f"{data['transit']:,.2f}", 1, ln=True)
-    
-    pdf.cell(140, 10, "Less: Unpresented Cheques", 1)
-    pdf.cell(50, 10, f"({data['outstanding']:,.2f})", 1, ln=True)
-    
+    # Header Info
+    pdf.cell(100, 7, f"Bank: {data.get('bank_name', 'N/A')}")
+    pdf.cell(0, 7, f"Account No: {data.get('acc_no', 'N/A')}", ln=True)
+    pdf.cell(0, 7, f"Period: {data.get('period', 'N/A')}", ln=True)
+    pdf.ln(5)
+
+    # 1. Adjusted Cash Book
     pdf.set_font("Arial", 'B', 11)
-    pdf.cell(140, 10, "Adjusted Balance", 1)
-    pdf.cell(50, 10, f"{data['reconciled']:,.2f}", 1, ln=True)
+    pdf.cell(0, 10, "1. Adjusted Cash Book Balance", ln=True)
+    pdf.set_font("Arial", size=10)
+    pdf.cell(140, 7, "Balance as per Cash Book (Unadjusted)", 1)
+    pdf.cell(40, 7, f"{data['raw_book_bal']:,.2f}", 1, ln=True)
     
+    for entry in data['book_adjustments']:
+        pdf.cell(140, 7, f"   {entry['desc']} (Ref: {entry['ref']})", 1)
+        pdf.cell(40, 7, f"{entry['amt']:,.2f}", 1, ln=True)
+    
+    pdf.set_font("Arial", 'B', 10)
+    pdf.cell(140, 7, "Adjusted Cash Book Balance", 1)
+    pdf.cell(40, 7, f"{data['adj_book_bal']:,.2f}", 1, ln=True)
+    pdf.ln(5)
+
+    # 2. Bank Reconciliation
+    pdf.set_font("Arial", 'B', 11)
+    pdf.cell(0, 10, "2. Reconciliation with Bank Statement", ln=True)
+    pdf.set_font("Arial", size=10)
+    pdf.cell(140, 7, "Balance as per Bank Statement", 1)
+    pdf.cell(40, 7, f"{data['bank_stmt_bal']:,.2f}", 1, ln=True)
+    
+    pdf.cell(140, 7, "Add: Unrealised Deposits (Lodgements not cleared)", 1, ln=True)
+    for dep in data['unrealised']:
+        pdf.cell(140, 7, f"   {dep['date']} - {dep['ref']} ({dep['desc']})", 1)
+        pdf.cell(40, 7, f"{dep['amt']:,.2f}", 1, ln=True)
+
+    pdf.cell(140, 7, "Less: Unpresented Cheques", 1, ln=True)
+    for chq in data['unpresented']:
+        pdf.cell(140, 7, f"   {chq['date']} - {chq['ref']} ({chq['desc']})", 1)
+        pdf.cell(40, 7, f"({chq['amt']:,.2f})", 1, ln=True)
+
+    pdf.set_font("Arial", 'B', 10)
+    pdf.cell(140, 7, "Reconciled Balance", 1)
+    pdf.cell(40, 7, f"{data['adj_book_bal']:,.2f}", 1, ln=True)
+
     return bytes(pdf.output())
 
-# --- 4. APP FLOW ---
-if "paid" not in st.session_state: st.session_state.paid = False
-
+# --- MAIN UI ---
 st.title("Bank Reconciliation AI")
-st.write("Professional Audit Reporting with Pay-Per-Use")
+st.sidebar.image("logo-removebg-preview.png")
 
-# Side Instruction [cite: 19]
-with st.sidebar:
-    st.header("Step-by-Step Guide")
-    st.write("1. Upload Current Month Files")
-    st.write("2. Review Free Preview")
-    st.write("3. Pay Dynamic Fee to Download")
-    st.divider()
-    st.write("Support: info@taxcalculator.lk")
+# Step 1: Uploads
+with st.container():
+    st.subheader("Step 1: Upload Documents (Excel/CSV Only)")
+    up_prev = st.file_uploader("Previous Month Reconciliation (Optional)", type=['xlsx', 'csv'])
+    up_stmt = st.file_uploader("Current Bank Statement", type=['xlsx', 'csv'])
+    up_book = st.file_uploader("Current Bank/Cash Book", type=['xlsx', 'csv'])
 
-# File Uploads
-c1, c2 = st.columns(2)
-with c1:
-    stmt_file = st.file_uploader("Bank Statement (Excel/CSV)", type=['xlsx', 'csv'])
-with c2:
-    book_file = st.file_uploader("Bank Book (Excel/CSV)", type=['xlsx', 'csv'])
-
-if stmt_file and book_file:
-    # Load data
-    df_book = pd.read_excel(book_file) if book_file.name.endswith('.xlsx') else pd.read_csv(book_file)
+if up_stmt and up_book:
+    # Read Files
+    df_stmt = pd.read_excel(up_stmt) if up_stmt.name.endswith('xlsx') else pd.read_csv(up_stmt)
+    df_book = pd.read_excel(up_book) if up_book.name.endswith('xlsx') else pd.read_csv(up_book)
+    
+    # Calculate Price
     entry_count = len(df_book)
     fee = calculate_fee(entry_count)
-    biz_name = get_business_branding(df_book)
     
-    # Preview Section
-    st.subheader("📋 Reconciliation Preview (Unadjusted)")
-    st.info(f"Detected **{entry_count}** entries in Bank Book. Total Fee: **${fee:.2f}**")
+    # MOCK LOGIC for Demonstration (Replace with your matching algorithms)
+    report_data = {
+        "biz_name": "User Business Name",
+        "bank_name": "Commercial Bank",
+        "acc_no": "123456789",
+        "period": "Month End 2024",
+        "raw_book_bal": 50000.00,
+        "adj_book_bal": 49850.00,
+        "bank_stmt_bal": 45000.00,
+        "book_adjustments": [{"desc": "Bank Charges", "ref": "SVC123", "amt": -150.00}],
+        "unrealised": [{"date": "2024-02-28", "ref": "DEP99", "desc": "Customer Pmt", "amt": 8000.00}],
+        "unpresented": [{"date": "2024-02-25", "ref": "CHQ501", "desc": "Rent", "amt": 3150.00}]
+    }
+
+    # PREVIEW SECTION
+    st.divider()
+    st.subheader("Step 2: Preview Reconciliation Results")
+    st.write(f"**Entries Counted:** {entry_count} | **Total Fee:** ${fee:.2f}")
     
-    # Mock analysis for preview
-    preview_data = {"bank_bal": 10000.0, "transit": 2500.0, "outstanding": 1200.0, "reconciled": 11300.0}
-    st.dataframe(df_book.head(5), use_container_width=True)
+    c1, c2 = st.columns(2)
+    c1.metric("Adjusted Book Balance", f"{report_data['adj_book_bal']:,.2f}")
+    c2.metric("Bank Stmt Balance", f"{report_data['bank_stmt_bal']:,.2f}")
+    
+    # Step 3: Payment & Download
+    st.divider()
+    st.subheader("Step 3: Secure Payment to Download")
+    
+    paypal_id = "AaXH1xGEvvmsTOUgFg_vWuMkZrAtD0HLzas87T-Hhzn0esGcceV0J9lGEg-ptQlQU0k89J3jyI8MLzQD"
+    
+    paypal_html = f"""
+    <div id="paypal-button-container"></div>
+    <script src="https://www.paypal.com/sdk/js?client-id={paypal_id}&currency=USD"></script>
+    <script>
+        paypal.Buttons({{
+            createOrder: function(data, actions) {{
+                return actions.order.create({{
+                    purchase_units: [{{ amount: {{ value: '{fee}' }} }}]
+                }});
+            }},
+            onApprove: function(data, actions) {{
+                return actions.order.capture().then(function(details) {{
+                    window.parent.postMessage({{ type: 'PAYMENT_SUCCESS' }}, '*');
+                }});
+            }}
+        }}).render('#paypal-button-container');
+    </script>
+    """
+    
+    components.html(paypal_html, height=300)
 
-    # Payment Section
-    if not st.session_state.paid:
-        st.markdown(f"""
-        <div class="price-card">
-            <h3>Download Full BRS Report</h3>
-            <p>Your report is ready. Please pay <b>${fee:.2f}</b> to download PDF and Excel formats with <b>{biz_name}</b> branding.</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        paypal_html = f"""
-        <div id="paypal-button-container"></div>
-        <script src="https://www.paypal.com/sdk/js?client-id={CLIENT_ID}&currency=USD"></script>
-        <script>
-            paypal.Buttons({{
-                createOrder: function(data, actions) {{
-                    return actions.order.create({{
-                        purchase_units: [{{ amount: {{ value: '{fee:.2f}' }} }}]
-                    }});
-                }},
-                onApprove: function(data, actions) {{
-                    return actions.order.capture().then(function(details) {{
-                        window.parent.postMessage({{type: 'payment_success'}}, '*');
-                    }});
-                }}
-            }}).render('#paypal-button-container');
-        </script>
-        """
-        components.html(paypal_html, height=500)
-        
-        # Simulated payment capture (In production, use a webhook or button check)
-        if st.button("I have completed the payment"):
-             st.session_state.paid = True
-             st.rerun()
-
-    # Download Section
-    if st.session_state.paid:
-        st.success(f"Payment Verified! Branding Applied: {biz_name}")
-        
-        # PDF Generation
-        pdf_bytes = create_pdf_report(preview_data, biz_name)
-        
-        col_dl1, col_dl2 = st.columns(2)
-        with col_dl1:
-            st.download_button("📥 Download BRS (PDF)", pdf_bytes, f"{biz_name}_BRS.pdf", "application/pdf")
-        with col_dl2:
-            # Excel Export
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df_book.to_excel(writer, index=False, sheet_name='Reconciliation')
-            st.download_button("📥 Download BRS (Excel)", output.getvalue(), f"{biz_name}_BRS.xlsx")
-
-else:
-    st.warning("Please upload files to see the preview and price.")
+    # Note: In a production app, use session_state to verify payment before showing download
+    st.info("Once payment is confirmed, the download buttons below will activate.")
+    
+    pdf_file = generate_pdf(report_data)
+    st.download_button("📄 Download PDF Report", pdf_file, "BRS_Report.pdf", "application/pdf")
+    
+    # Excel Export
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        df_book.to_excel(writer, sheet_name='Adjusted_Book')
+    st.download_button("Excel Download", buffer.getvalue(), "BRS_Report.xlsx")
